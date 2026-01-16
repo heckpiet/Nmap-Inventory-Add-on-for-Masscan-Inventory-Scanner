@@ -7,9 +7,9 @@ License: MIT
 
 Description:
     This script acts as a secondary stage for the Masscan Inventory Scanner.
-    It takes the aggregated 'inventory_hosts.csv', performs deep Nmap scans 
-    (OS fingerprinting, Service detection, DNS resolution), and clusters 
-    the results into a clean, human-readable inventory.
+    It performs deep Nmap scans and provides two output types:
+    1. Full Nmap standard output (human-readable technical log)
+    2. Clustered CSV report (management/inventory level)
 """
 
 import csv
@@ -18,7 +18,6 @@ import subprocess
 import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from datetime import datetime
 
 def check_dependencies() -> None:
     """Check if required system binaries are available."""
@@ -80,7 +79,7 @@ def parse_nmap_xml(xml_path: Path, csv_out: Path) -> None:
             "Services Cluster": " | ".join(service_list) if service_list else "No open ports"
         })
 
-    # Write to CSV with semicolon delimiter for European Excel compatibility
+    # Write to CSV with semicolon delimiter
     headers = ["IP Address", "DNS Name", "OS Family", "Services Cluster"]
     with csv_out.open('w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=headers, delimiter=';')
@@ -88,7 +87,7 @@ def parse_nmap_xml(xml_path: Path, csv_out: Path) -> None:
         writer.writerows(results)
 
 def run_nmap_stage(masscan_csv: str) -> None:
-    """Executes the Nmap scanning logic based on Masscan output."""
+    """Executes Nmap with multi-format output and post-processes the CSV."""
     check_dependencies()
     csv_path = Path(masscan_csv)
     
@@ -96,15 +95,14 @@ def run_nmap_stage(masscan_csv: str) -> None:
         print(f"[!] Input file not found: {csv_path}")
         return
 
-    # Define paths relative to the masscan output directory
     analysis_dir = csv_path.parent / "nmap_analysis"
     analysis_dir.mkdir(exist_ok=True)
     
     target_list = analysis_dir / "nmap_targets.tmp"
-    xml_output = analysis_dir / "nmap_raw_data.xml"
-    final_report = analysis_dir / "final_inventory_report.csv"
+    output_base = analysis_dir / "nmap_results" # Base name for .xml and .nmap files
+    final_csv = analysis_dir / "final_inventory_report.csv"
 
-    # Extract IPs from Masscan CSV
+    # Extract IPs
     ips = []
     with csv_path.open('r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
@@ -112,27 +110,40 @@ def run_nmap_stage(masscan_csv: str) -> None:
             if 'ip' in row: ips.append(row['ip'])
 
     if not ips:
-        print("[!] No IPs found to scan.")
+        print("[!] No IPs found in the masscan CSV.")
         return
 
     target_list.write_text("\n".join(ips))
-    print(f"[*] Prepared {len(ips)} hosts for deep inspection.")
+    print(f"[*] Prepared {len(ips)} hosts for Stage 2.")
 
-    # Execution of Nmap
-    # -A: OS/Service detection & Script scanning
-    # -R: Resolve DNS for all targets
-    nmap_cmd = ["sudo", "nmap", "-A", "-R", "-T4", "-iL", str(target_list), "-oX", str(xml_output)]
+    # Nmap Command:
+    # -oX: XML format (for the script to parse)
+    # -oN: Normal format (human-readable technical log)
+    nmap_cmd = [
+        "sudo", "nmap", "-A", "-R", "-T4", 
+        "-iL", str(target_list), 
+        "-oX", f"{output_base}.xml", 
+        "-oN", f"{output_base}.nmap"
+    ]
     
-    print(f"[*] Starting Nmap stage (Stage 2)...")
+    print(f"[*] Executing Nmap Deep Scan...")
     try:
         subprocess.run(nmap_cmd, check=True)
-        print("[*] Scan finished. Parsing results...")
-        parse_nmap_xml(xml_output, final_report)
-        print(f"[SUCCESS] Deep inventory created: {final_report}")
+        print("[*] Scan complete. Generating human-readable CSV...")
+        
+        # Parse the XML to create the clustered CSV
+        parse_nmap_xml(Path(f"{output_base}.xml"), final_csv)
+        
+        print("\n" + "="*60)
+        print("STAGE 2 COMPLETED")
+        print(f"1. Technical Log: {output_base}.nmap")
+        print(f"2. Inventory CSV: {final_csv}")
+        print("="*60)
+        
     except subprocess.CalledProcessError as e:
-        print(f"[!] Nmap failed: {e}")
+        print(f"[!] Nmap execution failed: {e}")
     except KeyboardInterrupt:
-        print("\n[!] User aborted.")
+        print("\n[!] Operation cancelled by user.")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
