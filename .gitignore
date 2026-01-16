@@ -1,0 +1,14 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Scan Results (Masscan & Nmap)
+Masscan_Inventar_Scanner_*/
+nmap_analysis/
+*.xml
+*.log
+*.tmp
+
+# OS specific
+.DS_Store
+Thumbs.db
